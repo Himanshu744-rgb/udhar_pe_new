@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'signup_screen.dart';
 import 'forgot_pswd.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +9,7 @@ import '../providers/theme_provider.dart';
 import '../services/firebase_service.dart';
 import 'shopkeeper_home.dart';
 import 'customer_home.dart';
+import '../screens/select_user_type.dart'; // Add this import
 
 class LoginScreen extends StatefulWidget {
   final String userType;
@@ -22,6 +24,7 @@ class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
   bool _isPasswordVisible = false;
   bool _rememberMe = false;
+  late SharedPreferences _prefs;
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<Offset> _slideAnimation;
@@ -32,6 +35,7 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
+    _loadRememberMe();
     _controller = AnimationController(
       duration: const Duration(milliseconds: 1200),
       vsync: this,
@@ -113,28 +117,86 @@ class _LoginScreenState extends State<LoginScreen>
   }
 
   Widget _buildSocialButton(ThemeProvider themeProvider, String assetPath) {
-    return Container(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: themeProvider.isDarkMode ? Colors.grey[800] : Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: IconButton(
-        icon: Image.asset(assetPath, height: 24),
-        onPressed: () {},
+    return GestureDetector(
+      onTap: () async {
+        try {
+          final credential = await _authService.signInWithGoogle();
+          if (credential != null && mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder:
+                    (context) =>
+                        widget.userType == "Shopkeeper"
+                            ? const ShopkeeperHomeScreen()
+                            : CustomerHomeScreen(),
+              ),
+            );
+          }
+        } catch (e) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to sign in with Google: ${e.toString()}'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      },
+      child: Container(
+        width: 200, // Make button wider
+        height: 45, // Make button taller
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: themeProvider.isDarkMode ? Colors.grey[800] : Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Image.asset(assetPath, height: 24),
+            const SizedBox(width: 12),
+            Text(
+              'Sign in with Google',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: themeProvider.textColor,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
+  Future<void> _loadRememberMe() async {
+    _prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _rememberMe = _prefs.getBool('rememberMe') ?? false;
+    });
+  }
+
   void _handleLogin() async {
-    String email = _emailController.text;
-    String password = _passwordController.text;
+    String email = _emailController.text.trim();
+    String password = _passwordController.text.trim();
+
+    if (_rememberMe) {
+      _prefs.setBool('rememberMe', true);
+      _prefs.setString('email', email);
+      _prefs.setString('password', password);
+      _prefs.setString('userType', widget.userType); // Save userType
+    } else {
+      _prefs.setBool('rememberMe', false);
+      _prefs.remove('email');
+      _prefs.remove('password');
+      _prefs.remove('userType');
+    }
 
     if (email.isEmpty || password.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -160,74 +222,93 @@ class _LoginScreenState extends State<LoginScreen>
       );
 
       if (credential.user != null) {
-        Navigator.pop(context); // Close loading dialog
+        // Close loading dialog
+        Navigator.pop(context);
 
         if (context.mounted) {
+          if (widget.userType == "Customer") {
+            // Create or update customer document
+            await FirebaseFirestore.instance
+                .collection('customers')
+                .doc(credential.user!.uid)
+                .set({
+                  'email': email,
+                  'userType': 'Customer',
+                  'lastLogin': FieldValue.serverTimestamp(),
+                  'uid': credential.user!.uid,
+                }, SetOptions(merge: true));
+          }
           if (widget.userType == "Shopkeeper") {
-            // Show dialog to collect shop name
-            String? shopName = await showDialog<String>(
-              context: context,
-              barrierDismissible: false,
-              builder: (BuildContext dialogContext) {
-                // Get ThemeProvider inside the builder
-                final dialogThemeProvider = Provider.of<ThemeProvider>(
-                  context,
-                  listen: false,
-                );
-                String tempShopName = '';
-                return AlertDialog(
-                  title: Text(
-                    'Enter Shop Name',
-                    style: TextStyle(color: dialogThemeProvider.textColor),
-                  ),
-                  content: TextField(
-                    onChanged: (value) => tempShopName = value,
-                    decoration: InputDecoration(
-                      hintText: 'Enter your shop name',
-                      hintStyle: TextStyle(
-                        color:
-                            dialogThemeProvider.isDarkMode
-                                ? Colors.white60
-                                : Colors.black45,
+            // Check if shop name exists in Firestore
+            final shopDoc =
+                await FirebaseFirestore.instance
+                    .collection('shops')
+                    .doc(credential.user!.uid)
+                    .get();
+
+            if (!shopDoc.exists) {
+              // Show dialog to collect shop name
+              String? shopName = await showDialog<String>(
+                context: context,
+                barrierDismissible: false,
+                builder: (BuildContext dialogContext) {
+                  final dialogThemeProvider = Provider.of<ThemeProvider>(
+                    context,
+                    listen: false,
+                  );
+                  String tempShopName = '';
+                  return AlertDialog(
+                    title: Text(
+                      'Enter Shop Name',
+                      style: TextStyle(color: dialogThemeProvider.textColor),
+                    ),
+                    content: TextField(
+                      onChanged: (value) => tempShopName = value,
+                      decoration: InputDecoration(
+                        hintText: 'Enter your shop name',
+                        hintStyle: TextStyle(
+                          color:
+                              dialogThemeProvider.isDarkMode
+                                  ? Colors.white60
+                                  : Colors.black45,
+                        ),
                       ),
                     ),
-                  ),
-                  actions: [
-                    TextButton(
-                      child: const Text('Submit'),
-                      onPressed: () {
-                        if (tempShopName.trim().isNotEmpty) {
-                          Navigator.of(dialogContext).pop(tempShopName);
-                        }
-                      },
-                    ),
-                  ],
-                );
-              },
-            );
+                    actions: [
+                      TextButton(
+                        child: const Text('Submit'),
+                        onPressed: () {
+                          if (tempShopName.trim().isNotEmpty) {
+                            Navigator.of(dialogContext).pop(tempShopName);
+                          }
+                        },
+                      ),
+                    ],
+                  );
+                },
+              );
 
-            if (shopName != null && shopName.trim().isNotEmpty) {
-              await FirebaseFirestore.instance
-                  .collection('shops')
-                  .doc(credential.user!.uid)
-                  .set({'name': shopName.trim()});
-
-              if (context.mounted) {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const ShopkeeperHomeScreen(),
-                  ),
-                );
+              if (shopName != null && shopName.trim().isNotEmpty) {
+                await FirebaseFirestore.instance
+                    .collection('shops')
+                    .doc(credential.user!.uid)
+                    .set({'name': shopName.trim()});
               }
+            }
+
+            if (context.mounted) {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ShopkeeperHomeScreen(),
+                ),
+              );
             }
           } else {
             // Navigate to CustomerScreen for customer login
             Navigator.pushReplacement(
               context,
-              MaterialPageRoute(
-                builder: (context) => CustomerHomeScreen(), // Remove const
-              ),
+              MaterialPageRoute(builder: (context) => CustomerHomeScreen()),
             );
           }
 
@@ -248,6 +329,8 @@ class _LoginScreenState extends State<LoginScreen>
         message = 'No user found with this email.';
       } else if (e.code == 'wrong-password') {
         message = 'Wrong password provided.';
+      } else if (e.code == 'invalid-email') {
+        message = 'Invalid email address.';
       } else {
         message = e.message ?? 'An error occurred';
       }
@@ -265,10 +348,10 @@ class _LoginScreenState extends State<LoginScreen>
       Navigator.pop(context); // Close loading dialog
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('An unexpected error occurred'),
+          SnackBar(
+            content: Text('Unexpected error: $e'),
             backgroundColor: Colors.red,
-            duration: Duration(seconds: 2),
+            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -335,7 +418,14 @@ class _LoginScreenState extends State<LoginScreen>
             Icons.arrow_back,
             color: themeProvider.isDarkMode ? Colors.white : Colors.black,
           ),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const SelectUserTypeScreen(),
+              ),
+            );
+          },
         ),
         actions: [
           IconButton(
@@ -529,13 +619,6 @@ class _LoginScreenState extends State<LoginScreen>
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         _buildSocialButton(themeProvider, "assets/google.png"),
-                        const SizedBox(width: 20),
-                        _buildSocialButton(themeProvider, "assets/apple.png"),
-                        const SizedBox(width: 20),
-                        _buildSocialButton(
-                          themeProvider,
-                          "assets/facebook.png",
-                        ),
                       ],
                     ),
                     const SizedBox(height: 32),

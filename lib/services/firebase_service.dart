@@ -1,5 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthService {
   final GoogleSignIn googleSignIn = GoogleSignIn(
@@ -38,7 +40,10 @@ class AuthService {
   }
 
   // Add email/password sign-up method
-  Future<UserCredential?> signUpWithEmailAndPassword(String email, String password) async {
+  Future<UserCredential?> signUpWithEmailAndPassword(
+    String email,
+    String password,
+  ) async {
     try {
       return await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: email,
@@ -52,6 +57,18 @@ class AuthService {
 
   // Add sign-out method
   Future<void> signOut() async {
+    // Get shared preferences instance
+    final prefs = await SharedPreferences.getInstance();
+    // Keep the rememberMe setting but remove credentials
+    final rememberMe = prefs.getBool('rememberMe') ?? false;
+    
+    // Clear user credentials but preserve the rememberMe setting
+    if (rememberMe) {
+      // If rememberMe is true, keep the setting but remove credentials
+      await prefs.setBool('rememberMe', true);
+      // We don't remove email, password, and userType here to preserve them
+    }
+    
     await FirebaseAuth.instance.signOut();
     await googleSignIn.signOut();
   }
@@ -59,14 +76,54 @@ class AuthService {
   // Add password reset method
   Future<void> resetPassword(String email) async {
     try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+      await FirebaseAuth.instance.sendPasswordResetEmail(
+        email: email,
+        actionCodeSettings: ActionCodeSettings(
+          url: 'https://first-app-39408.firebaseapp.com/__/auth/action',
+          handleCodeInApp: true,
+          androidPackageName: 'com.example.udhar_pe_new',
+          androidInstallApp: true,
+          androidMinimumVersion: '12',
+        ),
+      );
     } catch (e) {
       print("Error sending password reset email: $e");
+      rethrow;
     }
   }
 
   // Add method to get current user
   User? getCurrentUser() {
     return FirebaseAuth.instance.currentUser;
+  }
+}
+
+class FirebaseService {
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  Future<void> addData(String collection, Map<String, dynamic> data) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw Exception("User is not authenticated");
+    }
+
+    await _firestore.collection(collection).add({
+      ...data,
+      'userId': user.uid,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<QuerySnapshot> getData(String collection) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      throw Exception("User is not authenticated");
+    }
+
+    return await _firestore
+        .collection(collection)
+        .where('userId', isEqualTo: user.uid)
+        .get();
   }
 }

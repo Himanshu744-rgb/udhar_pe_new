@@ -1,6 +1,8 @@
+import 'dart:async'; // Add this import
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../providers/theme_provider.dart';
 
 class ForgotPswdScreen extends StatefulWidget {
@@ -56,15 +58,61 @@ class _ForgotPswdScreenState extends State<ForgotPswdScreen> {
     setState(() => _isLoading = true);
 
     try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(
-        email: _emailController.text,
-      );
-      setState(() => _isOtpSent = true);
-      _showSuccessDialog('Password reset email sent! Check your inbox.');
-    } on FirebaseAuthException catch (e) {
-      _showErrorDialog(e.message ?? 'An error occurred');
-    } finally {
+      // Verify email format
+      String email = _emailController.text.trim();
+      if (!email.contains('@') || !email.contains('.')) {
+        throw FirebaseAuthException(
+          code: 'invalid-email',
+          message: 'Please enter a valid email address',
+        );
+      }
+
+      // Send reset email
+      await FirebaseAuth.instance
+          .sendPasswordResetEmail(email: email)
+          .timeout(
+            const Duration(seconds: 30),
+            onTimeout: () {
+              throw TimeoutException('Request timed out. Please try again.');
+            },
+          );
+
+      if (mounted) {
+        setState(() => _isLoading = false);
+        _showSuccessDialog(
+          'If an account exists with $email, a password reset link will be sent.\n\n'
+          'Please also check your spam folder.\n\n'
+          'The link will expire in 1 hour.',
+        );
+
+        // Clear email field after success
+        _emailController.clear();
+      }
+    } on TimeoutException catch (_) {
       setState(() => _isLoading = false);
+      _showErrorDialog('Request timed out. Please try again.');
+    } on FirebaseAuthException catch (e) {
+      setState(() => _isLoading = false);
+      String message = 'An error occurred';
+
+      switch (e.code) {
+        case 'invalid-email':
+          message = 'Please enter a valid email address.';
+          break;
+        case 'user-not-found':
+          // Don't reveal if user exists or not for security
+          message = 'If an account exists, a reset link will be sent.';
+          break;
+        case 'too-many-requests':
+          message = 'Too many attempts. Please try again later.';
+          break;
+        default:
+          message = e.message ?? 'An error occurred';
+      }
+      _showErrorDialog(message);
+    } catch (e) {
+      setState(() => _isLoading = false);
+      _showErrorDialog('An error occurred. Please try again.');
     }
   }
 
@@ -155,48 +203,51 @@ class _ForgotPswdScreenState extends State<ForgotPswdScreen> {
           children: [
             const SizedBox(height: 20),
             Text(
-              'Enter your registered email',
-              style: TextStyle(fontSize: 16, color: themeProvider.textColor),
+              'Reset Your Password',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: themeProvider.textColor,
+              ),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 16),
+            Text(
+              'Enter your registered email address. We will send you a link to reset your password.',
+              style: TextStyle(
+                fontSize: 16,
+                color: themeProvider.textColor.withOpacity(0.8),
+              ),
+            ),
+            const SizedBox(height: 32),
             _buildTextField('Email', _emailController, themeProvider),
-            const SizedBox(height: 20),
-            if (!_isOtpSent)
-              ElevatedButton(
-                onPressed: _isLoading ? null : _sendPasswordResetEmail,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2296F3),
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _isLoading ? null : _sendPasswordResetEmail,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                padding: const EdgeInsets.symmetric(vertical: 15),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child:
-                    _isLoading
-                        ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text('Send Reset Email'),
               ),
-            if (_isOtpSent) ...[
-              const SizedBox(height: 20),
-              Text(
-                'Enter OTP sent to your email',
-                style: TextStyle(fontSize: 16, color: themeProvider.textColor),
-              ),
-              const SizedBox(height: 10),
-              _buildTextField('Enter OTP', _otpController, themeProvider),
-              const SizedBox(height: 20),
-              ElevatedButton(
-                onPressed: _verifyOTP,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2296F3),
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text('Verify OTP'),
-              ),
-            ],
+              child:
+                  _isLoading
+                      ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
+                        ),
+                      )
+                      : const Text(
+                        'Send Reset Link',
+                        style: TextStyle(fontSize: 16, color: Colors.white),
+                      ),
+            ),
+            // Remove OTP section as Firebase uses email links
           ],
         ),
       ),

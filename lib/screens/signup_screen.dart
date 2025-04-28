@@ -2,7 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; // Add this import
 import '../providers/theme_provider.dart';
+import 'shopkeeper_home.dart';
+import 'customer_home.dart'; // Add this import
+import '../services/firebase_service.dart'; // Add this import
+import 'login_screen.dart'; // Add this import
 
 class SignupScreen extends StatefulWidget {
   final String userType;
@@ -25,6 +30,10 @@ class _SignupScreenState extends State<SignupScreen>
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _phoneController = TextEditingController(); // Add this line
+
+  // Add AuthService instance
+  final AuthService _authService = AuthService();
 
   @override
   void initState() {
@@ -54,6 +63,7 @@ class _SignupScreenState extends State<SignupScreen>
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _phoneController.dispose(); // Add this line
     super.dispose();
   }
 
@@ -63,6 +73,7 @@ class _SignupScreenState extends State<SignupScreen>
     required TextEditingController controller,
     bool isPassword = false,
     String? Function(String?)? validator,
+    TextInputType? keyboardType,
   }) {
     final themeProvider = Provider.of<ThemeProvider>(context);
     return Container(
@@ -72,6 +83,7 @@ class _SignupScreenState extends State<SignupScreen>
         style: TextStyle(color: themeProvider.textColor),
         obscureText: isPassword ? !_isPasswordVisible : false,
         validator: validator,
+        keyboardType: keyboardType,
         decoration: InputDecoration(
           prefixIcon: Icon(
             icon,
@@ -84,7 +96,10 @@ class _SignupScreenState extends State<SignupScreen>
                       _isPasswordVisible
                           ? Icons.visibility
                           : Icons.visibility_off,
-                      color: themeProvider.isDarkMode ? Colors.white70 : Colors.black54,
+                      color:
+                          themeProvider.isDarkMode
+                              ? Colors.white70
+                              : Colors.black54,
                     ),
                     onPressed: () {
                       setState(() {
@@ -98,7 +113,8 @@ class _SignupScreenState extends State<SignupScreen>
             color: themeProvider.isDarkMode ? Colors.white60 : Colors.black45,
           ),
           filled: true,
-          fillColor: themeProvider.isDarkMode ? Colors.grey[800] : Colors.grey[200],
+          fillColor:
+              themeProvider.isDarkMode ? Colors.grey[800] : Colors.grey[200],
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide.none,
@@ -116,8 +132,14 @@ class _SignupScreenState extends State<SignupScreen>
     String email = _emailController.text.trim();
     String password = _passwordController.text.trim();
     String name = _nameController.text.trim();
+    String phone = _phoneController.text.trim();
 
-    if (email.isEmpty || password.isEmpty || name.isEmpty) {
+    // Validate phone number
+    if (!phone.startsWith('+91') && !phone.startsWith('91')) {
+      phone = '+91$phone';
+    }
+
+    if (email.isEmpty || password.isEmpty || name.isEmpty || phone.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please fill in all fields'),
@@ -137,7 +159,35 @@ class _SignupScreenState extends State<SignupScreen>
       final UserCredential userCredential = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(email: email, password: password);
 
+      // Update user profile with name and phone
       await userCredential.user?.updateDisplayName(name);
+
+      // Store additional user data in Firestore
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userCredential.user!.uid)
+          .set({
+            'name': name,
+            'email': email,
+            'phone': phone,
+            'userType': widget.userType,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+
+      // Create a reference in customers collection for udhari tracking
+      if (widget.userType == "Customer") {
+        await FirebaseFirestore.instance
+            .collection('customers')
+            .doc(phone)
+            .set({
+              'name': name,
+              'email': email,
+              'phoneNumber': phone,
+              'totalUdhari': 0,
+              'lastUpdated': FieldValue.serverTimestamp(),
+              'userId': userCredential.user!.uid,
+            });
+      }
 
       if (context.mounted) {
         Navigator.pop(context); // Close loading
@@ -145,6 +195,14 @@ class _SignupScreenState extends State<SignupScreen>
           const SnackBar(
             content: Text('Account created successfully!'),
             backgroundColor: Colors.green,
+          ),
+        );
+
+        // Navigate to login screen after successful signup
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => LoginScreen(userType: widget.userType),
           ),
         );
       }
@@ -175,40 +233,39 @@ class _SignupScreenState extends State<SignupScreen>
         builder: (context) => const Center(child: CircularProgressIndicator()),
       );
 
-      final GoogleSignIn googleSignIn = GoogleSignIn();
-      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+      final credential = await _authService.signInWithGoogle();
 
-      if (googleUser == null) {
-        Navigator.pop(context); // Close loading
-        return;
+      if (credential != null) {
+        if (context.mounted) {
+          Navigator.pop(context); // Close loading
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder:
+                  (context) =>
+                      widget.userType == "Shopkeeper"
+                          ? const ShopkeeperHomeScreen()
+                          : CustomerHomeScreen(),
+            ),
+          );
+        }
+      } else {
+        if (context.mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Google sign in was cancelled'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
       }
-
-      final GoogleSignInAuthentication googleAuth =
-          await googleUser.authentication;
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      final UserCredential userCredential = await FirebaseAuth.instance
-          .signInWithCredential(credential);
-
-      Navigator.pop(context); // Close loading
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Successfully signed up with Google!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-
-      print('Signed up with Google: ${userCredential.user?.email}');
     } catch (e) {
       if (context.mounted) {
-        Navigator.pop(context); // Close loading
+        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to sign up with Google: ${e.toString()}'),
+            content: Text('Failed to sign in with Google: ${e.toString()}'),
             backgroundColor: Colors.red,
           ),
         );
@@ -221,21 +278,37 @@ class _SignupScreenState extends State<SignupScreen>
     String assetPath, {
     VoidCallback? onPressed,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: themeProvider.isDarkMode ? Colors.grey[800] : Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: IconButton(
-        icon: Image.asset(assetPath, height: 24),
-        onPressed: onPressed ?? () {},
+    return InkWell(
+      onTap: _handleGoogleSignIn, // Update to use the handler
+      child: Container(
+        width: 200, // Make button wider
+        height: 45, // Make button taller
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: themeProvider.isDarkMode ? Colors.grey[800] : Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Image.asset(assetPath, height: 24),
+            const SizedBox(width: 12),
+            Text(
+              'Sign up with Google',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: themeProvider.textColor,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -327,6 +400,21 @@ class _SignupScreenState extends State<SignupScreen>
                         },
                       ),
                       _buildTextField(
+                        hintText: "Phone Number",
+                        icon: Icons.phone,
+                        controller: _phoneController,
+                        keyboardType: TextInputType.number,
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your phone number';
+                          }
+                          if (value.length < 10) {
+                            return 'Please enter a valid phone number';
+                          }
+                          return null;
+                        },
+                      ),
+                      _buildTextField(
                         hintText: "Email",
                         icon: Icons.email_outlined,
                         controller: _emailController,
@@ -373,8 +461,14 @@ class _SignupScreenState extends State<SignupScreen>
                         height: 50,
                         child: ElevatedButton(
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: themeProvider.isDarkMode ? Colors.blue : Colors.blue.shade100,
-                            foregroundColor: themeProvider.isDarkMode ? Colors.white : Colors.blue.shade900,
+                            backgroundColor:
+                                themeProvider.isDarkMode
+                                    ? Colors.blue
+                                    : Colors.blue.shade100,
+                            foregroundColor:
+                                themeProvider.isDarkMode
+                                    ? Colors.white
+                                    : Colors.blue.shade900,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -385,7 +479,10 @@ class _SignupScreenState extends State<SignupScreen>
                             "Sign Up",
                             style: TextStyle(
                               fontSize: 16,
-                              color: themeProvider.isDarkMode ? Colors.white : Colors.blue.shade900,
+                              color:
+                                  themeProvider.isDarkMode
+                                      ? Colors.white
+                                      : Colors.blue.shade900,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -431,14 +528,6 @@ class _SignupScreenState extends State<SignupScreen>
                           _buildSocialButton(
                             themeProvider,
                             "assets/google.png",
-                            onPressed: _handleGoogleSignIn,
-                          ),
-                          const SizedBox(width: 20),
-                          _buildSocialButton(themeProvider, "assets/apple.png"),
-                          const SizedBox(width: 20),
-                          _buildSocialButton(
-                            themeProvider,
-                            "assets/facebook.png",
                           ),
                         ],
                       ),

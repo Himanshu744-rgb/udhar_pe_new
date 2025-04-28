@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import 'manager_udhari_screen.dart';
+import 'statistics_screen.dart';
+import 'settings_screen.dart';
+
 
 class ShopkeeperHomeScreen extends StatelessWidget {
   const ShopkeeperHomeScreen({Key? key}) : super(key: key);
@@ -50,14 +53,12 @@ class ShopkeeperHomeScreen extends StatelessWidget {
     return Scaffold(
       backgroundColor: themeProvider.backgroundColor,
       appBar: AppBar(
-        backgroundColor: themeProvider.isDarkMode ? Colors.grey[850] : Colors.blue,
+        backgroundColor:
+            themeProvider.isDarkMode ? Colors.grey[850] : Colors.blue,
         elevation: 0,
         title: Text(
           'Shopkeeper Dashboard',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         actions: [
           IconButton(
@@ -120,24 +121,28 @@ class ShopkeeperHomeScreen extends StatelessWidget {
                       icon: Icons.bar_chart,
                       iconColor: Colors.blue,
                       onTap: () {
-                        // Add navigation to statistics screen
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const StatisticsScreen(),
+                          ),
+                        );
                       },
                     ),
-                    _buildDashboardCard(
-                      themeProvider: themeProvider,
-                      title: 'Customer List',
-                      icon: Icons.people,
-                      iconColor: Colors.orange,
-                      onTap: () {
-                        // Add navigation to customer list screen
-                      },
-                    ),
+
                     _buildDashboardCard(
                       themeProvider: themeProvider,
                       title: 'Settings',
                       icon: Icons.settings,
                       iconColor: Colors.grey,
-                      onTap: () {},
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => const SettingsScreen(),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
